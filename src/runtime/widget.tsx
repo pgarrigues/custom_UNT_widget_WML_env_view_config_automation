@@ -1,7 +1,6 @@
 import { React, AllWidgetProps, SessionManager } from 'jimu-core'
 import { UserSession } from '@esri/arcgis-rest-auth'
 import { JimuMapViewComponent, JimuMapView } from 'jimu-arcgis'
-import config from '../../config.json'
 const { useState, useEffect } = React
 import Graphic from 'esri/Graphic'
 import SimpleMarkerSymbol from 'esri/symbols/SimpleMarkerSymbol'
@@ -46,6 +45,14 @@ export default function CustomTraceWidget (
     items: DataItem[][];
   }
   
+  const [runtimeConfig, setRuntimeConfig] = useState({
+    utilityNetworkServiceUrl: '',
+    utilityNetworkFeatureServerUrl: '',
+    traceFindIsolatingValvesGlobalId: '',
+    traceFindIsolatingValvesType: '',
+    traceFindIsolatedAssetsGlobalId: '',
+    traceFindIsolatedAssetsType: ''
+  });
   const [assetGroupAndTypeCombinations, setAssetGroupAndTypeCombinations] = useState<AssetGroupAndTypeCombination[]>([]);
   const [activeTab, setActiveTab] = useState<'input' | 'results'>('input');
   const [mapView, setMapView] = useState<MapView | null>(null);
@@ -86,19 +93,304 @@ export default function CustomTraceWidget (
     }
   }
 
+  // Set Map View
+  const onActiveViewChange = (jimuMapView: JimuMapView) => {
+    if (jimuMapView && jimuMapView.view) {
+      setMapView(jimuMapView.view as MapView)
+    }
+  }
+
+  const getFeatureServerRootFromLayerUrl = (url?: string): string | null => {
+    if (!url) return null;
+
+    const match = url.match(/^(.*\/FeatureServer)(?:\/\d+)?\/?$/i);
+
+    return match ? match[1] : null;
+  };
+
+  const getUtilityNetworkServerUrlFromFeatureServerRoot = (featureServerRootUrl: string): string => {
+    return featureServerRootUrl.replace(/\/FeatureServer\/?$/i, '/UtilityNetworkServer');
+  };
+
+  const isValidUtilityNetworkServerUrl = async (
+    utilityNetworkServerUrl: string,
+    token: string
+  ): Promise<boolean> => {
+    try {
+      const response = await esriRequest(utilityNetworkServerUrl, {
+        query: {
+          f: 'json',
+          token
+        },
+        responseType: 'json'
+      });
+
+      if (response.data?.error) {
+        console.warn(
+          'Utility Network Server candidate returned an error:',
+          utilityNetworkServerUrl,
+          response.data.error
+        );
+        return false;
+      }
+
+      console.log('Valid Utility Network Server found:', utilityNetworkServerUrl, response.data);
+
+      return true;
+    } catch (error) {
+      console.warn('Not a valid Utility Network Server:', utilityNetworkServerUrl, error);
+      return false;
+    }
+  };
+
+  const getUtilityNetworkServiceUrlFromWebMap = async (
+    token: string
+  ): Promise<string | null> => {
+    if (!mapView) return null;
+
+    await mapView.when();
+    await mapView.map.loadAll();
+
+    const mapAny = mapView.map as any;
+
+    /**
+     * Attempt 1:
+     * Try to read Utility Networks directly from the WebMap.
+     */
+    try {
+      const utilityNetworks = mapAny.utilityNetworks;
+
+      console.log('map.utilityNetworks', utilityNetworks);
+
+      if (utilityNetworks && utilityNetworks.length > 0) {
+        const utilityNetwork = utilityNetworks.getItemAt
+          ? utilityNetworks.getItemAt(0)
+          : utilityNetworks[0];
+
+        if (utilityNetwork?.load) {
+          await utilityNetwork.load();
+        }
+
+        if (utilityNetwork?.url) {
+          console.log('Utility Network URL found from map.utilityNetworks:', utilityNetwork.url);
+          return utilityNetwork.url;
+        }
+      }
+    } catch (error) {
+      console.warn('Could not read map.utilityNetworks:', error);
+    }
+
+    /**
+     * Attempt 2:
+     * Fallback: scan all map layers, find FeatureServer roots,
+     * derive UtilityNetworkServer URLs, and test them.
+     */
+    const candidateFeatureServerRoots = new Set<string>();
+
+    const allLayers = mapAny.allLayers?.toArray
+      ? mapAny.allLayers.toArray()
+      : mapView.map.layers.toArray();
+
+    console.log('allLayers from map', allLayers);
+
+    for (const layer of allLayers) {
+      const root = getFeatureServerRootFromLayerUrl(layer.url);
+
+      if (root) {
+        candidateFeatureServerRoots.add(root);
+      }
+
+      /**
+       * Some layers may have sublayers.
+       */
+      const sublayers = layer.allSublayers?.toArray
+        ? layer.allSublayers.toArray()
+        : [];
+
+      for (const sublayer of sublayers) {
+        const sublayerRoot = getFeatureServerRootFromLayerUrl(sublayer.url);
+
+        if (sublayerRoot) {
+          candidateFeatureServerRoots.add(sublayerRoot);
+        }
+      }
+    }
+
+    console.log(
+      'candidateFeatureServerRoots',
+      Array.from(candidateFeatureServerRoots)
+    );
+
+    for (const featureServerRoot of candidateFeatureServerRoots) {
+      const utilityNetworkServerUrl =
+        getUtilityNetworkServerUrlFromFeatureServerRoot(featureServerRoot);
+
+      const isValid = await isValidUtilityNetworkServerUrl(
+        utilityNetworkServerUrl,
+        token
+      );
+
+      if (isValid) {
+        return utilityNetworkServerUrl;
+      }
+    }
+
+    console.warn('No Utility Network service found in the connected web map.');
+
+    return null;
+  };
+
+  const getFeatureServerUrlFromUtilityNetworkUrl = (utilityNetworkUrl: string) => {
+    return utilityNetworkUrl.replace(/\/UtilityNetworkServer\/?$/i, '/FeatureServer');
+  };
+
+  const queryNamedTraceConfigurations = async (
+    utilityNetworkServiceUrl: string,
+    token: string
+  ): Promise<any[]> => {
+    const url = `${utilityNetworkServiceUrl}/traceConfigurations/query`;
+
+    const response = await esriRequest(url, {
+      query: {
+        f: 'json',
+        token
+      },
+      method: 'post',
+      responseType: 'json'
+    });
+
+    const data = response.data;
+
+    return (
+      data.traceConfigurations ??
+      data.namedTraceConfigurations ??
+      data.configurations ??
+      []
+    );
+  };
+
+  const findTraceConfigurationByName = (
+    traceConfigurations: any[],
+    traceConfigurationName: string
+  ) => {
+    return traceConfigurations.find(config =>
+      config.name === traceConfigurationName ||
+      config.traceConfigurationName === traceConfigurationName
+    );
+  };
+
+  const getTraceConfigurationGlobalId = (traceConfiguration: any) => {
+    return (
+      traceConfiguration.globalId ??
+      traceConfiguration.globalID ??
+      traceConfiguration.globalid ??
+      traceConfiguration.id
+    );
+  };
+
+  const getTraceConfigurationType = (
+    traceConfiguration: any,
+    fallbackType: string
+  ) => {
+    return (
+      traceConfiguration.traceType ??
+      traceConfiguration.type ??
+      fallbackType
+    );
+  };
+
+  const initializeRuntimeConfigFromWebMap = async () => {
+    try {
+      const token = await getToken();
+      if (!token) return;
+
+      const utilityNetworkServiceUrl =
+        await getUtilityNetworkServiceUrlFromWebMap(token);
+
+      if (!utilityNetworkServiceUrl) {
+        throw new Error("No Utility Network service found in the connected web map.");
+      }
+
+      const utilityNetworkFeatureServerUrl =
+        getFeatureServerUrlFromUtilityNetworkUrl(utilityNetworkServiceUrl);
+
+      const traceConfigurations =
+        await queryNamedTraceConfigurations(
+          utilityNetworkServiceUrl,
+          token
+        );
+
+      console.log("traceConfigurations", traceConfigurations);
+
+      const findIsolatingValvesTraceConfig =
+        findTraceConfigurationByName(
+          traceConfigurations,
+          "VindIsolerendeAfsluiters"
+        );
+
+      const findIsolatedAssetsTraceConfig =
+        findTraceConfigurationByName(
+          traceConfigurations,
+          "VindGeisoleerdeAssets"
+        );
+
+      if (!findIsolatingValvesTraceConfig) {
+        throw new Error("Trace configuration 'VindIsolerendeAfsluiters' was not found.");
+      }
+
+      if (!findIsolatedAssetsTraceConfig) {
+        throw new Error("Trace configuration 'VindGeisoleerdeAssets' was not found.");
+      }
+
+      const traceFindIsolatingValvesGlobalId =
+        getTraceConfigurationGlobalId(findIsolatingValvesTraceConfig);
+
+      const traceFindIsolatedAssetsGlobalId =
+        getTraceConfigurationGlobalId(findIsolatedAssetsTraceConfig);
+
+      const traceFindIsolatingValvesType =
+        getTraceConfigurationType(findIsolatingValvesTraceConfig, "isolation");
+
+      const traceFindIsolatedAssetsType =
+        getTraceConfigurationType(findIsolatedAssetsTraceConfig, "connected");
+
+      const detectedConfig = {
+        utilityNetworkServiceUrl,
+        utilityNetworkFeatureServerUrl,
+        traceFindIsolatingValvesGlobalId,
+        traceFindIsolatingValvesType,
+        traceFindIsolatedAssetsGlobalId,
+        traceFindIsolatedAssetsType
+      };
+
+      console.log("Detected runtime config from web map", detectedConfig);
+
+      setRuntimeConfig(detectedConfig);
+    } catch (error) {
+      console.error("Failed to initialize widget config from web map", error);
+      setIsTraceReturnError(true);
+      setTraceError(error.message);
+    }
+  };
+
+  useEffect(() => {
+    if (!mapView) return;
+
+    initializeRuntimeConfigFromWebMap();
+  }, [mapView]);
+
   // Get all asset groups and types combinations
-  const getAssetGroupAndTypeCombinations = () => {
+  const getAssetGroupAndTypeCombinations = (utilityNetworkFeatureServerUrl: string) => {
     const layersUrls: string[] = [];
-    const utilityNetworFeatureServerUrl = config.UTILITY_NETWORK_FEATURE_SERVER_URL;
     
-    esriRequest(utilityNetworFeatureServerUrl, {
+    esriRequest(utilityNetworkFeatureServerUrl, {
       query: {
         f: "json"
       }
     }).then((response) => {
       const layers = response.data.layers;
       layers.forEach((layer) => {
-        const layerUrl = utilityNetworFeatureServerUrl + "/" + layer.id;
+        const layerUrl = utilityNetworkFeatureServerUrl + "/" + layer.id;
         layersUrls.push(layerUrl);
       });
     }).then(() => {
@@ -146,15 +438,10 @@ export default function CustomTraceWidget (
   }
 
   useEffect(() => {
-    getAssetGroupAndTypeCombinations()
-  }, [])
-
-  // Set Map View
-  const onActiveViewChange = (jimuMapView: JimuMapView) => {
-    if (jimuMapView && jimuMapView.view) {
-      setMapView(jimuMapView.view as MapView)
-    }
-  }
+    if (!runtimeConfig.utilityNetworkFeatureServerUrl) return;
+    setAssetGroupAndTypeCombinations([]);
+    getAssetGroupAndTypeCombinations(runtimeConfig.utilityNetworkFeatureServerUrl);
+  }, [runtimeConfig.utilityNetworkFeatureServerUrl]);
 
   // Popups management
   useEffect(() => {
@@ -365,15 +652,29 @@ export default function CustomTraceWidget (
     setIsTraceReturnError(false);
 
     const token = await getToken()
-    if (!token) return
+    if (!token) {
+      setIsTraceRunning(false);
+      return;
+    }
+
+    if (
+      !runtimeConfig.utilityNetworkServiceUrl ||
+      !runtimeConfig.traceFindIsolatingValvesGlobalId ||
+      !runtimeConfig.traceFindIsolatedAssetsGlobalId
+    ) {
+      setIsTraceRunning(false);
+      setIsTraceReturnError(true);
+      setTraceError("Widget configuration could not be read from the connected web map.");
+      return;
+    }
     
-    const traceUrl = `${config.UTILITY_NETWORK_SERVICE_URL}/trace`
+    const traceUrl = `${runtimeConfig.utilityNetworkServiceUrl}/trace`
 
     try {
       const traceParamsFindIsolatingValves = {
-        traceConfigurationGlobalId: config.TRACE_FIND_ISOLATING_VALVES_GLOBAL_ID,
+        traceConfigurationGlobalId: runtimeConfig.traceFindIsolatingValvesGlobalId,
         traceLocations: '['+findIsolatingValvesTraceLocations+']',
-        traceType: config.TRACE_FIND_ISOLATING_VALVES_TYPE,
+        traceType: runtimeConfig.traceFindIsolatingValvesType,
         f: 'json'
       }
       
@@ -416,9 +717,9 @@ export default function CustomTraceWidget (
       setFindIsolatedAssetsTraceLocations(newFindIsolatedAssetsTraceLocations);
 
       const traceParamsFindIsolatedAssets = {
-        traceConfigurationGlobalId: config.TRACE_FIND_ISOLATED_ASSETS_GLOBAL_ID,
+        traceConfigurationGlobalId: runtimeConfig.traceFindIsolatedAssetsGlobalId,
         traceLocations: JSON.stringify(newFindIsolatedAssetsTraceLocations),
-        traceType: config.TRACE_FIND_ISOLATED_ASSETS_TYPE,
+        traceType: runtimeConfig.traceFindIsolatedAssetsType,
         f: 'json'
       }
 

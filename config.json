@@ -1,0 +1,8 @@
+{
+    "UTILITY_NETWORK_SERVICE_URL" : "https://web.gis-acc.wml.nl/arcgis-un/rest/services/UN/UtilityNetworkViewOnly/UtilityNetworkServer",
+    "TRACE_FIND_ISOLATING_VALVES_GLOBAL_ID" : "{BA7AEF33-3D7C-41CF-B575-DBCDC25356D7}",
+    "TRACE_FIND_ISOLATING_VALVES_TYPE" : "isolation",
+    "TRACE_FIND_ISOLATED_ASSETS_GLOBAL_ID" : "{4CF83CC5-0D8B-4D36-97E3-13F5AE4D4ED1}",
+    "TRACE_FIND_ISOLATED_ASSETS_TYPE" : "connected",
+    "UTILITY_NETWORK_FEATURE_SERVER_URL" : "https://web.gis-acc.wml.nl/arcgis-un/rest/services/UN/UtilityNetworkViewOnly/FeatureServer"
+}

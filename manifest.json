@@ -1,0 +1,19 @@
+{
+  "name": "custom_UNT_widget_WML_env",
+  "label": "custom_UNT_widget_WML_env",
+  "type": "widget",
+  "version": "1.17.0",
+  "exbVersion": "1.17.0",
+  "author": "Pierre-Loup Garrigues",
+  "description": "This is a custom Utility Network Trace widget, developed for WaterWebView application. Sensitive information is not available for the user.",
+  "copyright": "",
+  "dependency": "jimu-arcgis",
+  "properties": {},
+  "translatedLocales": [
+    "en"
+  ],
+  "defaultSize": {
+    "width": 400,
+    "height": 600
+  }
+}

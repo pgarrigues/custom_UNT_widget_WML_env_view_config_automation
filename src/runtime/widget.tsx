@@ -134,8 +134,6 @@ export default function CustomTraceWidget (
         return false;
       }
 
-      console.log('Valid Utility Network Server found:', utilityNetworkServerUrl, response.data);
-
       return true;
     } catch (error) {
       console.warn('Not a valid Utility Network Server:', utilityNetworkServerUrl, error);
@@ -160,8 +158,6 @@ export default function CustomTraceWidget (
     try {
       const utilityNetworks = mapAny.utilityNetworks;
 
-      console.log('map.utilityNetworks', utilityNetworks);
-
       if (utilityNetworks && utilityNetworks.length > 0) {
         const utilityNetwork = utilityNetworks.getItemAt
           ? utilityNetworks.getItemAt(0)
@@ -172,7 +168,6 @@ export default function CustomTraceWidget (
         }
 
         if (utilityNetwork?.url) {
-          console.log('Utility Network URL found from map.utilityNetworks:', utilityNetwork.url);
           return utilityNetwork.url;
         }
       }
@@ -190,8 +185,6 @@ export default function CustomTraceWidget (
     const allLayers = mapAny.allLayers?.toArray
       ? mapAny.allLayers.toArray()
       : mapView.map.layers.toArray();
-
-    console.log('allLayers from map', allLayers);
 
     for (const layer of allLayers) {
       const root = getFeatureServerRootFromLayerUrl(layer.url);
@@ -215,11 +208,6 @@ export default function CustomTraceWidget (
         }
       }
     }
-
-    console.log(
-      'candidateFeatureServerRoots',
-      Array.from(candidateFeatureServerRoots)
-    );
 
     for (const featureServerRoot of candidateFeatureServerRoots) {
       const utilityNetworkServerUrl =
@@ -320,8 +308,6 @@ export default function CustomTraceWidget (
           token
         );
 
-      console.log("traceConfigurations", traceConfigurations);
-
       const findIsolatingValvesTraceConfig =
         findTraceConfigurationByName(
           traceConfigurations,
@@ -362,8 +348,6 @@ export default function CustomTraceWidget (
         traceFindIsolatedAssetsGlobalId,
         traceFindIsolatedAssetsType
       };
-
-      console.log("Detected runtime config from web map", detectedConfig);
 
       setRuntimeConfig(detectedConfig);
     } catch (error) {
